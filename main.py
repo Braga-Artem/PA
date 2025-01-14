@@ -1,116 +1,131 @@
-import os
 import random
-import struct
-import tempfile
-import heapq
+from collections import deque
 
-def generate_large_file(file_path, size_in_mb):
-    """Створіть великий бінарний файл із випадковими цілими числами."""
-    num_integers = size_in_mb * 1024 * 1024 // 4  # Each integer is 4 bytes
-    with open(file_path, 'wb') as f:
-        for _ in range(num_integers):
-            f.write(struct.pack('i', random.randint(0, 1000000)))
+# Оцінка кількості неправильних позицій
+def h1(state, goal_state):
+    return sum(1 for i in range(len(state)) if state[i] != goal_state[i] and state[i] != 0)
 
-def read_integers_from_file(file_path):
-    """Читання цілих чисел із двійкового файлу."""
-    with open(file_path, 'rb') as f:
-        while chunk := f.read(4):
-            yield struct.unpack('i', chunk)[0]
+# Генерація сусідів
+def get_neighbors(state):
+    neighbors = []
+    zero_index = state.index(0)
+    row, col = divmod(zero_index, 3)
+    moves = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Вгору, вниз, вліво, вправо
 
-def write_integers_to_file(file_path, integers):
-    """Записати цілі числа у двійковий файл."""
-    with open(file_path, 'wb') as f:
-        for num in integers:
-            f.write(struct.pack('i', num))
+    for dr, dc in moves:
+        new_row, new_col = row + dr, col + dc
+        if 0 <= new_row < 3 and 0 <= new_col < 3:
+            new_index = new_row * 3 + new_col
+            new_state = list(state)
+            new_state[zero_index], new_state[new_index] = new_state[new_index], new_state[zero_index]
+            neighbors.append(tuple(new_state))
+    return neighbors
 
-def print_file_content(file_path, limit=100):
-    """Друк вмісту двійкового файлу як цілих чисел до вказаної межі."""
-    with open(file_path, 'rb') as f:
-        count = 0
-        while chunk := f.read(4):
-            print(struct.unpack('i', chunk)[0], end=' ')
-            count += 1
-            if count >= limit:
-                print("...")
-                break
+# Алгоритм BFS
+def bfs_solve(initial_state, goal_state):
+    queue = deque([(initial_state, [])])
+    visited = set()
+    generated_nodes = 0
+    max_memory = 0
 
-def convert_to_text_file(binary_file, text_file):
-    """Перетворення двійкового файлу у текстовий для зручного перегляду."""
-    with open(binary_file, 'rb') as bin_f, open(text_file, 'w') as txt_f:
-        for number in read_integers_from_file(binary_file):
-            txt_f.write(f"{number}\n")
+    while queue:
+        state, path = queue.popleft()
+        if state in visited:
+            continue
+        visited.add(state)
+        max_memory = max(max_memory, len(queue) + len(visited))
+        if state == goal_state:
+            return path, generated_nodes, max_memory
+        for neighbor in get_neighbors(state):
+            if neighbor not in visited:
+                queue.append((neighbor, path + [neighbor]))
+                generated_nodes += 1
+    return None, generated_nodes, max_memory
 
-def balanced_multiway_merge_sort(input_file, output_file, temp_dir, memory_limit_mb):
-    """Виконаня збалансованого багатостороннього сортування злиттям у великому файлі"""
-    chunk_size = memory_limit_mb * 1024 * 1024 // 4  # Number of integers per chunk
-    temp_files = []
+# Алгоритм A*
+def a_star_solve(initial_state, goal_state):
+    open_set = [(h1(initial_state, goal_state), 0, initial_state, [])]
+    visited = set()
+    generated_nodes = 0
+    max_memory = 0
 
-    #Розділення файлів на відсортовані частини
-    with open(input_file, 'rb') as f:
-        while chunk := f.read(chunk_size * 4):
-            integers = list(struct.unpack(f'{len(chunk) // 4}i', chunk))
-            integers.sort()
+    while open_set:
+        _, cost, state, path = open_set.pop(0)
+        if state in visited:
+            continue
+        visited.add(state)
+        max_memory = max(max_memory, len(open_set) + len(visited))
+        if state == goal_state:
+            return path, generated_nodes, max_memory
+        for neighbor in get_neighbors(state):
+            if neighbor not in visited:
+                new_cost = cost + 1
+                heuristic = h1(neighbor, goal_state)
+                open_set.append((new_cost + heuristic, new_cost, neighbor, path + [neighbor]))
+                generated_nodes += 1
+        open_set.sort()
+    return None, generated_nodes, max_memory
 
-            temp_file = tempfile.NamedTemporaryFile(delete=False, dir=temp_dir)
-            write_integers_to_file(temp_file.name, integers)
-            temp_files.append(temp_file.name)
+# Алгоритм Backtracking
+def backtrack_solve(state, goal_state, path=None, visited=None, max_depth=50):
+    if path is None:
+        path = []
+    if visited is None:
+        visited = set()
+    if len(path) > max_depth:
+        return None, 0, len(visited)  # Гранична глибина
+    if state == goal_state:
+        return path, len(visited), len(visited)
 
-    #Об’єднання відсортованих фрагментів за допомогою черги пріоритетів
-    min_heap = []
-    file_pointers = []
+    visited.add(state)
+    max_memory = len(visited)
+    for neighbor in sorted(get_neighbors(state), key=lambda s: h1(s, goal_state)):
+        if neighbor not in visited:
+            result, generated, memory = backtrack_solve(neighbor, goal_state, path + [neighbor], visited, max_depth)
+            if result is not None:
+                return result, generated + 1, max(max_memory, memory)
+    return None, len(visited), max_memory
 
-    for temp_file in temp_files:
-        fp = open(temp_file, 'rb')
-        file_pointers.append(fp)
-        num = struct.unpack('i', fp.read(4))[0]
-        heapq.heappush(min_heap, (num, temp_file))
+# Запуск експериментів
+def run_experiments():
+    goal_state = tuple(range(9))  # Цільовий стан: 0, 1, 2, 3, 4, 5, 6, 7, 8
+    initial_states = [tuple(random.sample(range(9), 9)) for _ in range(20)]
 
-    with open(output_file, 'wb') as out:
-        while min_heap:
-            smallest, source_file = heapq.heappop(min_heap)
-            out.write(struct.pack('i', smallest))
+    results = []
+    for state in initial_states:
+        print(f"Initial state: {state}")
+        for algorithm_name, algorithm in [
+            ("BFS", bfs_solve),
+            ("A*", a_star_solve),
+            ("Backtracking", lambda s, g: backtrack_solve(s, g, max_depth=50))
+        ]:
+            print(f"Running {algorithm_name}...")
+            solution, generated, memory = algorithm(state, goal_state)
+            iterations = len(solution) if solution else 0
+            results.append({
+                "algorithm": algorithm_name,
+                "initial_state": state,
+                "iterations": iterations,
+                "generated": generated,
+                "memory": memory,
+            })
+    return results
 
-            source_fp = file_pointers[temp_files.index(source_file)]
-            next_chunk = source_fp.read(4)
-            if next_chunk:
-                next_num = struct.unpack('i', next_chunk)[0]
-                heapq.heappush(min_heap, (next_num, source_file))
+# Формування таблиць
+def generate_table(results, algorithm_name):
+    print(f"\nТаблиця характеристик для {algorithm_name}")
+    print("Початкові стани\tІтерації\tВсього вузлів\tВсього вузлів у пам’яті")
+    for i, result in enumerate(results):
+        if result['algorithm'] == algorithm_name:
+            state = result['initial_state']
+            iterations = result['iterations']
+            generated = result['generated']
+            memory = result['memory']
+            print(f"Стан {i+1}\t{iterations}\t{generated}\t{memory}")
 
-    # Закриття та очистка тимчасових файлів
-    for fp in file_pointers:
-        fp.close()
+# Головний блок
+if __name__ == "__main__":
+    results = run_experiments()
 
-    for temp_file in temp_files:
-        os.remove(temp_file)
-
-
-input_file = 'large_random_numbers.bin'
-output_file = 'sorted_numbers.bin'
-temp_dir = 'temp_sorting'
-
-os.makedirs(temp_dir, exist_ok=True)
-
-# Генерація файлу розміром 10Мб
-print("Generating input file...")
-generate_large_file(input_file, 10)
-
-# Відсортування файлу із обмеженням пам’яті 100 Мб
-print("Sorting file...")
-balanced_multiway_merge_sort(input_file, output_file, temp_dir, memory_limit_mb=100)
-
-# перевірка вихідних файлів
-print("Verifying sorted output...")
-sorted_numbers = list(read_integers_from_file(output_file))
-assert sorted_numbers == sorted(sorted_numbers)
-print("Sorting successful!")
-
-# Друк вмісту вхідних і вихідних файлів
-print("\nContent of input file:")
-print_file_content(input_file)
-print("\nContent of output file:")
-print_file_content(output_file)
-
-# конвертація файлів в текстовий документ для перегляду роботи алгоритму
-convert_to_text_file(input_file, 'input_numbers.txt')
-convert_to_text_file(output_file, 'sorted_numbers.txt')
-print("\nInput and output files have been converted to text files: 'input_numbers.txt', 'sorted_numbers.txt'")
+    for algorithm in ["BFS", "A*", "Backtracking"]:
+        generate_table(results, algorithm)
